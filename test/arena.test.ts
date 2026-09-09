@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, Stream } from "effect";
+import { McpSchema } from "effect/unstable/ai";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ArenaLive } from "../src/Arena";
 import { GoogleMaps } from "../src/GoogleMaps";
@@ -54,8 +55,9 @@ test("fetches only the requested page and maps all block types, excluding channe
     })));
   });
   const result = await runTool(client, { page: 2, per: 6 });
+  expect(() => new McpSchema.CallToolResult({ content: [], structuredContent: result })).not.toThrow();
   expect(urls).toEqual(["https://api.are.na/v3/channels/my%2Fchannel%3F/contents?page=2&per=6"]);
-  expect(JSON.parse(JSON.stringify(result))).toEqual({
+  expect(result).toStrictEqual({
     channel: "my/channel?", page: 2, nextPage: 3, per: 6, totalPages: 4, totalItems: 23,
     blocks: [
       { id: 11, type: "Text", url: "https://www.are.na/block/11", content: "**Note**" },
