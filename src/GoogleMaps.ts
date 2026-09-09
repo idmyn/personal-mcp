@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Predicate, Record, Schema } from "effect";
 import {
   HttpClient,
   HttpClientRequest,
@@ -121,6 +121,9 @@ export class GoogleMaps extends Context.Service<
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
+const omitUndefined = <T extends Record<string, unknown>>(fields: T): Partial<T> =>
+  Record.filter(fields, Predicate.isNotUndefined) as Partial<T>;
+
 export const GoogleMapsLive = Layer.effect(
   GoogleMaps,
   Effect.gen(function* () {
@@ -195,23 +198,25 @@ export const GoogleMapsLive = Layer.effect(
       return {
         places: (response.places ?? []).map((place) => ({
           name: place.displayName?.text ?? "Unknown",
-          address: place.formattedAddress,
-          location: place.location,
-          rating: place.rating,
-          userRatingCount: place.userRatingCount,
-          priceLevel: place.priceLevel,
-          summary: place.editorialSummary?.text,
-          websiteUrl: place.websiteUri,
-          googleMapsUrl: place.googleMapsUri,
-          openingHours: place.currentOpeningHours?.weekdayDescriptions,
-          reviews: includeReviews
-            ? (place.reviews ?? []).map((review) => ({
-                author: review.authorAttribution?.displayName,
-                rating: review.rating,
-                relativePublishTime: review.relativePublishTimeDescription,
-                text: review.text?.text,
-              }))
-            : undefined,
+          ...omitUndefined({
+            address: place.formattedAddress,
+            location: place.location,
+            rating: place.rating,
+            userRatingCount: place.userRatingCount,
+            priceLevel: place.priceLevel,
+            summary: place.editorialSummary?.text,
+            websiteUrl: place.websiteUri,
+            googleMapsUrl: place.googleMapsUri,
+            openingHours: place.currentOpeningHours?.weekdayDescriptions,
+            reviews: includeReviews
+              ? (place.reviews ?? []).map((review) => omitUndefined({
+                  author: review.authorAttribution?.displayName,
+                  rating: review.rating,
+                  relativePublishTime: review.relativePublishTimeDescription,
+                  text: review.text?.text,
+                }))
+              : undefined,
+          }),
         })),
       };
     });
