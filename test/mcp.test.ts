@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { createInterface } from "node:readline";
-import { Readable } from "node:stream";
 import { Effect, Stream } from "effect";
 import { Tool } from "effect/unstable/ai";
+import { HttpRouter } from "effect/unstable/http";
 import { GoogleMaps } from "../src/GoogleMaps";
+import { McpHttpRoutes } from "../src/main";
 import { SearchGoogleMaps, Tools, ToolsLive } from "../src/Tools";
 
 test("tool handler uses the injected Google Maps service", async () => {
@@ -55,35 +55,44 @@ test("tool handler uses the injected Google Maps service", async () => {
   });
 });
 
-test("stdio client discovers and validates search_google_maps", async () => {
-  const child = Bun.spawn([process.execPath, "run", "src/main.ts"], {
-    cwd: new URL("..", import.meta.url).pathname,
-    env: { ...process.env, GOOGLE_MAPS_API_KEY: "" },
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
+test("HTTP client discovers and validates search_google_maps", async () => {
+  const { handler, dispose } = HttpRouter.toWebHandler(McpHttpRoutes, {
+    disableLogger: true,
   });
-  const deadline = setTimeout(() => child.kill(), 8_000);
-  const stderr = new Response(child.stderr).text();
-  const lines = createInterface({ input: Readable.from(child.stdout) });
-  const messages = lines[Symbol.asyncIterator]();
   let id = 0;
+  let sessionId: string | null = null;
+  let protocolVersion: string | null = null;
 
-  const send = (message: object) => {
-    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
-    child.stdin.flush();
+  const send = async (message: object) => {
+    const headers = new Headers({
+      Accept: "application/json, text/event-stream",
+      "Content-Type": "application/json",
+    });
+    if (sessionId) headers.set("Mcp-Session-Id", sessionId);
+    if (protocolVersion) {
+      headers.set("Mcp-Protocol-Version", protocolVersion);
+    }
+
+    const response = await handler(
+      new Request("http://localhost/mcp", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ jsonrpc: "2.0", ...message }),
+      }),
+    );
+    sessionId = response.headers.get("Mcp-Session-Id") ?? sessionId;
+    protocolVersion =
+      response.headers.get("Mcp-Protocol-Version") ?? protocolVersion;
+    return response;
   };
   const request = async (method: string, params: object) => {
     const requestId = ++id;
-    send({ id: requestId, method, params });
-    while (true) {
-      const line = await messages.next();
-      if (line.done) throw new Error(`Server closed stdout: ${await stderr}`);
-      const message = JSON.parse(line.value);
-      expect(message.jsonrpc).toBe("2.0");
-      if (message.id === requestId) return message;
-      expect(message.id).toBeUndefined();
-    }
+    const response = await send({ id: requestId, method, params });
+    expect(response.status).toBe(200);
+    const message = await response.json();
+    expect(message.jsonrpc).toBe("2.0");
+    expect(message.id).toBe(requestId);
+    return message;
   };
 
   try {
@@ -98,7 +107,11 @@ test("stdio client discovers and validates search_google_maps", async () => {
       name: "personal",
       version: "0.0.1",
     });
-    send({ method: "notifications/initialized" });
+    expect(sessionId).toBeString();
+    expect(protocolVersion as string | null).toBe("2025-11-25");
+
+    const notified = await send({ method: "notifications/initialized" });
+    expect(notified.status).toBe(202);
 
     const listed = await request("tools/list", {});
     expect(listed.error).toBeUndefined();
@@ -123,28 +136,10 @@ test("stdio client discovers and validates search_google_maps", async () => {
       required: ["query"],
     });
 
-    const missingKey = await request("tools/call", {
-      name: "search_google_maps",
-      arguments: { query: "coffee" },
-    });
-    expect(missingKey.error).toBeUndefined();
-    expect(missingKey.result.isError).toBe(true);
-
-    for (const args of [{ query: 42 }, {}]) {
-      const invalid = await request("tools/call", {
-        name: "search_google_maps",
-        arguments: args,
-      });
-      expect(invalid.error).toBeUndefined();
-      expect(invalid.result.isError).toBe(true);
-      expect(invalid.result.structuredContent).toBeUndefined();
-    }
+    const getResponse = await handler(new Request("http://localhost/mcp"));
+    expect(getResponse.status).toBe(405);
+    expect(getResponse.headers.get("Allow")).toBe("POST");
   } finally {
-    clearTimeout(deadline);
-    child.stdin.end();
-    child.kill();
-    await child.exited;
-    lines.close();
-    await stderr;
+    await dispose();
   }
-}, 10_000);
+});

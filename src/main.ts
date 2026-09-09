@@ -1,28 +1,34 @@
+import * as BunHttpServer from "@effect/platform-bun/BunHttpServer";
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
-import * as BunStdio from "@effect/platform-bun/BunStdio";
-import { Effect, Layer, Logger } from "effect";
+import { Layer } from "effect";
 import { McpProtocol, McpServer } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient, HttpRouter } from "effect/unstable/http";
 import { GoogleMapsLive } from "./GoogleMaps";
 import { Tools, ToolsLive } from "./Tools";
 
-const AppLive = McpServer.toolkit(Tools).pipe(
+export const McpHttpRoutes = McpServer.toolkit(Tools).pipe(
   Layer.provide(ToolsLive),
   Layer.provide(GoogleMapsLive),
   Layer.provide(FetchHttpClient.layer),
   Layer.provide(
-    McpServer.layerStdio({
+    McpServer.layerHttp({
       name: "personal",
       version: "0.0.1",
+      path: "/mcp",
       protocols: [McpProtocol.v2025_11_25],
     }),
   ),
-  Layer.provide(BunStdio.layer),
 );
 
-// Keep stdout exclusively for MCP frames.
-BunRuntime.runMain(
-  Layer.launch(AppLive).pipe(
-    Effect.provideService(Logger.LogToStderr, true),
+const AppLive = HttpRouter.serve(McpHttpRoutes).pipe(
+  Layer.provide(
+    BunHttpServer.layer({
+      hostname: "127.0.0.1",
+      port: Number(process.env.PORT ?? "3000"),
+    }),
   ),
 );
+
+if (import.meta.main) {
+  BunRuntime.runMain(Layer.launch(AppLive));
+}
