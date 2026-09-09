@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, Stream } from "effect";
+import { Effect, Logger, Stream } from "effect";
 import { McpSchema } from "effect/unstable/ai";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { Arena } from "../src/Arena";
@@ -118,4 +118,36 @@ test.each([400, 403, 503])("bounds retries for HTTP %s", async (status) => {
     message: expect.stringContaining(`(${status} POST`),
   });
   expect(attempts).toBe(status === 503 ? 3 : 1);
+});
+
+test.each([undefined, "London"])("logs bounded, redacted HTTP diagnostics with location=%s", async (location) => {
+  const logs: unknown[] = [];
+  const logger = Logger.make(({ message }) => { logs.push(message); });
+  const client = HttpClient.make((request) => Effect.succeed(HttpClientResponse.fromWeb(
+    request,
+    new Response(`API key test-key rejected: ${"x".repeat(3000)}`, {
+      status: 403,
+      headers: { "content-type": "text/plain", "retry-after": "5" },
+    }),
+  )));
+  await expect(Effect.gen(function* () {
+    const maps = yield* GoogleMaps;
+    return yield* maps.search({ query: "private query", location });
+  }).pipe(
+    Effect.provide(GoogleMapsLive),
+    Effect.provideService(HttpClient.HttpClient, client),
+    Effect.provide(Logger.layer([logger])),
+    Effect.runPromise,
+  )).rejects.toMatchObject({ _tag: "GoogleMapsError" });
+
+  expect(logs).toEqual([["Google Maps HTTP request failed", {
+    stage: location ? "geocode" : "search",
+    status: 403,
+    retryAfter: "5",
+    contentType: "text/plain",
+    body: (`API key [REDACTED] rejected: ${"x".repeat(3000)}`).slice(0, 2048),
+    bodyTruncated: true,
+  }]]);
+  expect(JSON.stringify(logs)).not.toContain("test-key");
+  expect(JSON.stringify(logs)).not.toContain("private query");
 });

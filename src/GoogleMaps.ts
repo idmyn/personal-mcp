@@ -128,6 +128,24 @@ export const GoogleMapsLive = Layer.effect(
   GoogleMaps,
   Effect.gen(function* () {
     const client = (yield* HttpClient.HttpClient).pipe(
+      HttpClient.tap(Effect.fn("GoogleMaps.logFailedResponse")(function* (response) {
+        if (response.status >= 200 && response.status < 300) return;
+        const body = yield* response.text.pipe(
+          Effect.timeout("1 second"),
+          Effect.catch(() => Effect.succeed("[response body unavailable]")),
+        );
+        const apiKey = response.request.headers["x-goog-api-key"];
+        const redactedBody = apiKey ? body.replaceAll(apiKey, "[REDACTED]") : body;
+        yield* Effect.logWarning("Google Maps HTTP request failed", {
+          stage: response.request.headers["x-goog-fieldmask"] === "places.location"
+            ? "geocode" : "search",
+          status: response.status,
+          retryAfter: response.headers["retry-after"],
+          contentType: response.headers["content-type"],
+          body: redactedBody.slice(0, 2048),
+          bodyTruncated: redactedBody.length > 2048,
+        });
+      })),
       HttpClient.filterStatusOk,
       HttpClient.retryTransient({
         retryOn: "errors-only",
