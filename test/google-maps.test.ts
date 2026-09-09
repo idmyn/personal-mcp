@@ -3,7 +3,7 @@ import { Effect, Stream } from "effect";
 import { McpSchema } from "effect/unstable/ai";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { Arena } from "../src/Arena";
-import { GoogleMapsLive } from "../src/GoogleMaps";
+import { GoogleMaps, GoogleMapsLive } from "../src/GoogleMaps";
 import { Tools, ToolsLive } from "../src/Tools";
 
 let oldApiKey: string | undefined;
@@ -74,4 +74,48 @@ test.each([false, true])("Maps results are valid MCP JSON with includeReviews=%s
       },
     ],
   });
+});
+
+test("retries geocoding and search independently after 503 responses", async () => {
+  const attempts = { geocode: 0, search: 0 };
+  const client = HttpClient.make((request) => Effect.sync(() => {
+    const stage = request.headers["x-goog-fieldmask"] === "places.location" ? "geocode" : "search";
+    attempts[stage]++;
+    return HttpClientResponse.fromWeb(request, attempts[stage] === 1
+      ? new Response("Unavailable", { status: 503 })
+      : Response.json(stage === "geocode"
+        ? { places: [{ location: { latitude: 51.5, longitude: -0.1 } }] }
+        : { places: [{ displayName: { text: "Prufrock Coffee" } }] }));
+  }));
+  const result = await Effect.gen(function* () {
+    const maps = yield* GoogleMaps;
+    return yield* maps.search({ query: "Prufrock London", location: "London", includeReviews: false });
+  }).pipe(
+    Effect.provide(GoogleMapsLive),
+    Effect.provideService(HttpClient.HttpClient, client),
+    Effect.runPromise,
+  );
+  expect(result).toStrictEqual({ places: [{ name: "Prufrock Coffee" }] });
+  expect(attempts).toEqual({ geocode: 2, search: 2 });
+});
+
+test.each([400, 403, 503])("bounds retries for HTTP %s", async (status) => {
+  let attempts = 0;
+  const client = HttpClient.make((request) => Effect.sync(() => {
+    attempts++;
+    return HttpClientResponse.fromWeb(request, new Response("Failed", { status }));
+  }));
+  const result = Effect.gen(function* () {
+    const maps = yield* GoogleMaps;
+    return yield* maps.search({ query: "Prufrock London" });
+  }).pipe(
+    Effect.provide(GoogleMapsLive),
+    Effect.provideService(HttpClient.HttpClient, client),
+    Effect.runPromise,
+  );
+  await expect(result).rejects.toMatchObject({
+    _tag: "GoogleMapsError",
+    message: expect.stringContaining(`(${status} POST`),
+  });
+  expect(attempts).toBe(status === 503 ? 3 : 1);
 });

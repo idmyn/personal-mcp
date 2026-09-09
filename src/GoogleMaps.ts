@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Predicate, Record, Schema } from "effect";
+import { Context, Effect, Layer, Predicate, Record, Schedule, Schema } from "effect";
 import {
   HttpClient,
   HttpClientRequest,
@@ -127,7 +127,14 @@ const omitUndefined = <T extends Record<string, unknown>>(fields: T): Partial<T>
 export const GoogleMapsLive = Layer.effect(
   GoogleMaps,
   Effect.gen(function* () {
-    const client = (yield* HttpClient.HttpClient).pipe(HttpClient.filterStatusOk);
+    const client = (yield* HttpClient.HttpClient).pipe(
+      HttpClient.filterStatusOk,
+      HttpClient.retryTransient({
+        retryOn: "errors-only",
+        times: 2,
+        schedule: Schedule.exponential("500 millis"),
+      }),
+    );
 
     const search = Effect.fn("GoogleMaps.search")(function* (
       input: GoogleMapsSearchInput,
