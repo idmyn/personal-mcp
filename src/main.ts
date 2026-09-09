@@ -3,11 +3,13 @@ import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import { Layer } from "effect";
 import { McpProtocol, McpServer } from "effect/unstable/ai";
 import { FetchHttpClient, HttpRouter } from "effect/unstable/http";
+import { ArenaLive } from "./Arena";
 import { GoogleMapsLive } from "./GoogleMaps";
 import { Tools, ToolsLive } from "./Tools";
 
 export const McpHttpRoutes = McpServer.toolkit(Tools).pipe(
   Layer.provide(ToolsLive),
+  Layer.provide(ArenaLive),
   Layer.provide(GoogleMapsLive),
   Layer.provide(FetchHttpClient.layer),
   Layer.provide(

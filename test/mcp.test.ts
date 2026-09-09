@@ -2,9 +2,10 @@ import { expect, test } from "bun:test";
 import { Effect, Stream } from "effect";
 import { Tool } from "effect/unstable/ai";
 import { HttpRouter } from "effect/unstable/http";
+import { Arena, ArenaError } from "../src/Arena";
 import { GoogleMaps } from "../src/GoogleMaps";
 import { McpHttpRoutes } from "../src/main";
-import { SearchGoogleMaps, Tools, ToolsLive } from "../src/Tools";
+import { FetchArenaBlocks, SearchGoogleMaps, Tools, ToolsLive } from "../src/Tools";
 
 test("tool handler uses the injected Google Maps service", async () => {
   const searches: unknown[] = [];
@@ -21,6 +22,9 @@ test("tool handler uses the injected Google Maps service", async () => {
     );
   }).pipe(
     Effect.provide(ToolsLive),
+    Effect.provideService(Arena, {
+      fetchBlocks: () => Effect.fail(new ArenaError({ message: "Unexpected call" })),
+    }),
     Effect.provideService(GoogleMaps, {
       search: (input) =>
         Effect.sync(() => {
@@ -115,7 +119,14 @@ test("HTTP client discovers and validates search_google_maps", async () => {
 
     const listed = await request("tools/list", {});
     expect(listed.error).toBeUndefined();
-    expect(listed.result.tools).toHaveLength(1);
+    expect(listed.result.tools).toHaveLength(2);
+    const arenaTool = listed.result.tools.find((tool: { name: string }) => tool.name === "fetch_arena_blocks");
+    expect(arenaTool.inputSchema).toEqual(Tool.getJsonSchema(FetchArenaBlocks));
+    expect(arenaTool.outputSchema).toEqual(Tool.getJsonSchemaFromSchema(FetchArenaBlocks.successSchema));
+    const invalid = await request("tools/call", {
+      name: "fetch_arena_blocks", arguments: { page: 0 },
+    });
+    expect(invalid.error ?? invalid.result?.isError).toBeTruthy();
     const tool = listed.result.tools[0];
     expect(tool.name).toBe("search_google_maps");
     expect(tool.inputSchema).toEqual(Tool.getJsonSchema(SearchGoogleMaps));
